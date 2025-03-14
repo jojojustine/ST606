@@ -1,0 +1,17 @@
+---
+title: "To do"
+output: html_notebook
+---
+
+
+  - Find the country names for the country codes
+  - label work times based on the type of exercise (e.g., ski, row, push,pull, BBJ, carry, WB)
+  - change the times to seconds 
+  - explore plots for 14 countries 
+  
+    - e.g., male/female finishing time across countries
+    - changes in the run section accross the race i.e., run 1 vs run 8
+    - times for different portions of the race 
+    
+    
+    

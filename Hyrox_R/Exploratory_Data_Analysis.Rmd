@@ -10,8 +10,7 @@ output:
 ```{r setup,include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 # Load necessary libraries
-library(readr)
-library(tidyr)
+library(tidyverse)
 ```
 ## Existing columns
 
@@ -32,6 +31,14 @@ df <- read.csv("hyrox_results.csv")
 #summary(df)
 head(df)
 ```
+
+## Filtering the data
+```{r}
+countries_to_view <- df %>% count(nationality) %>% filter(n > 500) %>% pull(nationality)
+countries_to_view <- countries_to_view[-1]
+df_filtered <- df %>% filter(nationality %in% countries_to_view) %>% filter(division == "open")
+```
+
 ## Adding new columns
 Splitting the event_name column into Season, Year, and Event_Venue
 
