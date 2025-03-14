@@ -1,0 +1,122 @@
+---
+title: "Exploratory Data Analysis For Hyrox Dataset"
+author: "Jojo Justine"
+date: "2025-03-13"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(readr)
+library(tidyr)
+```
+## Existing columns
+
+There are total 34 Columns. 
+  
+  
+ event_id, event_name, gender, nationality, age_group, division, total_time, work_time, roxzone_time, 
+ run_time, run_1, work_1, roxzone_1, run_2, work_2, roxzone_2, run_3, work_3, roxzone_3, run_4, work_4, 
+ roxzone_4, run_5, work_5, roxzone_5, run_6, work_6, roxzone_6, run_7, work_7, roxzone_7, run_8, work_8,
+ roxzone_8. 
+    
+    
+ **First few records of the dataset are below.**  
+ 
+```{r}
+# Read the CSV file
+df <- read.csv("hyrox_results.csv")
+#summary(df)
+head(df)
+```
+## Adding new columns
+Splitting the event_name column into Season, Year, and Event_Venue
+
+```{r}
+
+# Get original column names
+original_columns <- names(df)
+
+# Create a copy of 'event_name' to preserve it
+df$event_name_original <- df$event_name  
+
+# Split 'event_name' into 'Season', 'Year', and 'Event_Venue'
+df <- separate(df, col = event_name, into = c("Season", "Year", "Event_Venue"), sep = " ", extra = "merge", fill = "right")
+
+# Restore 'event_name' and remove temporary column
+df$event_name <- df$event_name_original  
+df$event_name_original <- NULL  
+
+# Reorder columns: Place 'Season', 'Year', and 'Event_Venue' right after 'event_name'
+event_name_index <- which(original_columns == "event_name")  # Find position of event_name
+new_column_order <- append(original_columns, c("Season", "Year", "Event_Venue"), after = event_name_index)
+
+# Arrange dataframe in new column order
+df <- df[, new_column_order]
+
+# Save the updated dataset
+write_excel_csv(df, "hyrox_results_updated.csv")
+summary(df)
+```
+## Null Values
+
+**Finding missing values in various fields.**
+
+```{r}
+# Count total number of records
+total_records <- nrow(df)
+cat("Total number of records:", total_records, "\n")
+
+# Count missing values in the nationality column
+missing_nationality <- sum(is.na(df$nationality) | df$nationality == "")
+cat("Missing nationality values:", missing_nationality, "\n")
+
+
+# Count missing values in the age_group column
+missing_age <- sum(is.na(df$age_group) | df$age_group == "")
+cat("Missing age group values:", missing_age, "\n")
+
+# Count missing values in the division column
+missing_division <- sum(is.na(df$division) | df$division == "")
+cat("Missing division values:", missing_division, "\n")
+
+# Count Zeroes in total_time column
+missing_total_time <- sum(is.na(df$total_time) | df$total_time == "" | df$total_time == "0:00:00")
+cat("Zero values in total_time:", missing_total_time, "\n")
+
+```
+## Unique Values
+
+**Finding Unique values in age_group field.**
+
+```{r}
+# Count occurrences of each age group and convert to data frame
+age_group_counts <- as.data.frame(table(df$age_group))
+
+# Print as a table
+print(age_group_counts)
+```
+Below are the assumptions for the age groups.  
+
+| Age Group |Notes                             |
+|-----------|----------------------------------|
+| MHE       | Men's Health Edition category.   |
+| WHE       | Women's Health Edition category. |
+| MME       | Men's Masters Edition category.  |
+| WWE       | Women's Masters Edition category.|
+| X40+      | Mixed 40 and above.              |
+  
+  
+**Finding Unique values in division field.**
+```{r}
+# Get unique values in the division column
+unique_division <- unique(df$division)
+
+# Print unique age groups
+print(unique_division)
+```
+
+
