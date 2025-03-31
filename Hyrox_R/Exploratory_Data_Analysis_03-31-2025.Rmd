@@ -1,0 +1,834 @@
+---
+title: "Exploratory Data Analysis For Hyrox Dataset"
+author: "Jojo Justine"
+date: "2025-03-24"
+output:
+  html_document:
+    code_folding: hide
+---
+```{r}
+#install.packages("countrycode")
+```
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(readr)
+library(tidyverse)
+library(countrycode)
+library(dplyr)
+library(lubridate)
+library(plotly)
+```
+
+## Basic Data Formatting
+   
+     
+ * Adding New Column named **"Country"** with country names expanded.
+```{r}
+# Read the CSV file
+df <- read.csv("hyrox_results_updated.csv")
+# Create a new column with full country names using countrycode package
+# Treat empty strings in nationality as NA
+df$nationality[df$nationality == ""] <- NA
+df$country <- countrycode(df$nationality, origin = "iso3c", destination = "country.name")
+# Identify unmatched values
+unmatched <- unique(df$nationality[is.na(df$country)])
+# Create a custom mapping for unmatched values
+custom_codes <- c(
+  ALG = "Algeria", ARU = "Aruba", BRU = "Brunei", BUL = "Bulgaria", CAY = "Cayman Islands",
+  CGO = "Congo", CRC = "Costa Rica", CRO = "Croatia", DEN = "Denmark", ENG = "England",
+  ESA = "El Salvador", GER = "Germany", GRE = "Greece", GUA = "Guatemala", INA = "Indonesia",
+  IRI = "Iran", KOS = "Kosovo", KSA = "Saudi Arabia", KUW = "Kuwait", LAT = "Latvia",
+  LIB = "Lebanon", MAD = "Madagascar", MAS = "Malaysia", MON = "Monaco", MRI = "Mauritius",
+  MTN = "Mauritania", NED = "Netherlands", NIG = "Nigeria", PHI = "Philippines", PLE = "Palestine",
+  POR = "Portugal", PUR = "Puerto Rico", RSA = "South Africa", SCO = "Scotland", SIN = "Singapore",
+  SKN = "Saint Kitts and Nevis", SLO = "Slovenia", SRI = "Sri Lanka", SUD = "Sudan",
+  SUI = "Switzerland", TPE = "Taiwan", TRI = "Trinidad and Tobago", UAE = "United Arab Emirates",
+  URU = "Uruguay", VIE = "Vietnam", ZIM = "Zimbabwe"
+)
+# Fill in unmatched countries using custom mapping
+missing_idx <- which(is.na(df$country) & df$nationality %in% names(custom_codes))
+df$country[missing_idx] <- custom_codes[df$nationality[missing_idx]]
+
+# Adding country column aftrer Nationality column
+df <- df %>% relocate(country, .after = nationality)
+```
+ * Renaming each columns so that it's readable.
+```{r}
+# Renaming column names for readability
+colnames(df) <- c("event_id",	"event_name",	"season",	"year",	"event_venue",	"gender",	"nationality",	"country",	"age_group",	"division",	"total_time",	"work_time",	"total_transition_time",	"run_time",	"run_1",	"ski_erg",	"transition_time_1",	"run_2",	"sled_push",	"transition_time_2",	"run_3",	"sled_pull",	"transition_time_3",	"run_4",	"burpee_broad_jumps",	"transition_time_4",	"run_5",	"rowing",	"transition_time_5",	"run_6",	"farmers_carry",	"transition_time_6",	"run_7",	"sandbag_lunges",	"transition_time_7",	"run_8",	"wall_balls",	"transition_time_8")
+```
+
+* Converting each time columns from HH:MM:SS to Seconds
+
+```{r}
+# Convert Time Columns to Seconds
+hyrox_df <- df
+time_cols <- grep("time|run_|ski|sled|burpee|rowing|work_|roxzone_|carry|lunges|balls", names(df), value = TRUE)
+
+# Strip whitespace and convert to seconds using hms()
+for (col in time_cols) {
+  hyrox_df[[col]] <- as.numeric(hms(as.character(trimws(df[[col]]))))
+}
+
+```
+* Check whether the participants completed the competition. Checking each time fileds. If any of the time fields are 0, means the participant didn't completed the competition.
+```{r}
+# Identify all time-related columns
+time_cols <- grep("total_|run_|ski|sled|burpee|rowing|work_|roxzone_|carry|lunges|balls", names(hyrox_df), value = TRUE)
+
+# Flag those who completed all segments (no zero in time columns)
+hyrox_df$completed <- ifelse(apply(hyrox_df[time_cols], 1, function(row) all(row > 0)), "Yes", "No")
+
+# View summary
+table(hyrox_df$completed)
+
+```
+* Winner among the 3 seasons.
+```{r}
+completed_df <- hyrox_df %>% filter(completed == "Yes")
+winner_df <- completed_df %>% filter(total_time == min(total_time,na.rm = TRUE))
+winner_df
+                                    
+```
+* Countries with more than 500 participants among 3 seasons.
+```{r}
+countries_to_view <- hyrox_df %>% count(nationality) %>% filter(n > 500) %>% pull(nationality)
+countries_to_view <- countries_to_view[-1]
+filtered_df <- hyrox_df %>% filter(nationality %in% countries_to_view) %>% filter(division == "open")
+countries_to_view
+```
+* Create new data frame filtered_df with participants from top countries with division == "open".
+```{r}
+countries_to_view <- hyrox_df %>% count(country) %>% filter(n > 500)%>% filter(!is.na(country)) %>% pull(country)
+filtered_df <- hyrox_df %>% filter(country %in% countries_to_view) %>% filter(division == "open")
+
+glimpse(filtered_df)
+```
+* Count of participants per country and season
+```{r}
+
+# Count participants per country per season
+country_counts_by_season <- filtered_df %>%
+  filter(!is.na(country)) %>%
+  count(season, country, sort = TRUE) %>% 
+  arrange(country,season)
+
+# View result
+print(country_counts_by_season)
+
+```
+
+## Data Analysis Plots
+
+## **Plot 1**.   
+    
+Below plot provides a comparative view of the number of HYROX race participants across different countries over three seasons (S4, S5, and S6).
+
+```{r}
+# Create ggplot with custom tooltip
+p <- ggplot(country_counts_by_season, aes(x = country, y = n, fill = season,
+                                          text = paste("Country:", country,
+                                                       "<br>Season:", season,
+                                                       "<br>Participants:", n))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Participant Count by Country and Season",
+       x = "Country", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Convert to interactive plot
+ggplotly(p, tooltip = "text")
+
+```
+The **United States, Germany and United Kingdom** have the highest participation across all seasons, with highest participation in **Season 5 (S5)**.
+A sharp increase in participation from **Season 4 to Season 5** is visible in most countries, indicating growing popularity.
+**Season 6 (S6)** shows a slight dip in some countries, possibly due to missing data.  
+Season 4 (2021 - 2022). 
+Season 5 (2022 - 2023). 
+Season 6 (2023).  
+
+  
+## **Plot 2**. 
+    
+Below plot examines the distribution of male and female participants across three HYROX seasons (S4, S5, S6).
+```{r}
+# Count participants per season and gender
+season_gender_counts <- hyrox_df %>%
+  filter(!is.na(season), !is.na(gender)) %>%
+  count(season, gender)
+
+# Create grouped bar chart
+p4 <- ggplot(season_gender_counts, aes(x = season, y = n, fill = gender,
+                                       text = paste("Season:", season,
+                                                    "<br>Gender:", gender,
+                                                    "<br>Participants:", n))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Participants by Season and Gender", x = "Season", y = "Count") +
+  theme_minimal()
+
+# Make it interactive
+ggplotly(p4, tooltip = "text")
+
+```
+
+Male participation is consistently higher than female across all seasons.
+- Both genders saw a significant rise in Season 5, indicating a surge in event popularity.
+- Season 6 experienced a slight dip compared to Season 5. 
+    
+    
+        
+## Creating new Data Frame         
+Creating new data frame **s5_filtered_df** with records for season 5 and division open. Filtering data for countries with more than 100 participants.
+   
+```{r}
+s5_countries_to_view <- hyrox_df %>% filter(season == "S5") %>% count(country) %>% filter(n > 100)%>% filter(!is.na(country)) %>% pull(country)
+s5_filtered_df <- hyrox_df %>% filter(season == "S5", country %in% s5_countries_to_view) %>% filter(division == "open")
+
+glimpse(s5_filtered_df)
+```
+
+## **Plot 3**. 
+
+This bar chart highlights the number of participants from each country during **Season 5** of the HYROX competition.
+
+```{r}
+
+# Count participants by country
+country_counts <- s5_filtered_df %>%
+  filter(!is.na(country)) %>%
+  count(country)
+
+# Plot
+p1 <- ggplot(country_counts, aes(x = reorder(country, -n), y = n,
+                                 text = paste("Country:", country,
+                                              "<br>Participants:", n))) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Season 5: Participants by Country", x = "Country", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(p1, tooltip = "text")
+
+```
+The **United Kingdom** leads with the highest number of participants in Season 5, followed closely by **Germany** and the **United States**.
+  
+## **Plot 4**.  
+Below plot presents a breakdown of HYROX participants count by gender for **Season 5**. 
+
+```{r}
+gender_counts <- s5_filtered_df %>%
+  filter(!is.na(gender)) %>%
+  count(gender)
+
+p2 <- ggplot(gender_counts, aes(x = gender, y = n,
+                                text = paste("Gender:", gender,
+                                             "<br>Participants:", n))) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+  labs(title = "Season 5: Participants by Gender", x = "Gender", y = "Count") +
+  theme_minimal()
+
+ggplotly(p2, tooltip = "text")
+```
+Male participants clearly outnumber female participants in Season 5.  
+
+## **Plot 5**. 
+Below bar chart illustrates the distribution of participants across different age groups in **Season 5** of the HYROX competition.
+```{r}
+age_counts <- s5_filtered_df %>%
+  filter(!is.na(age_group), age_group != "") %>%
+  count(age_group)
+
+p3 <- ggplot(age_counts, aes(x = age_group, y = n,
+                             text = paste("Age Group:", age_group,
+                                          "<br>Participants:", n))) +
+  geom_bar(stat = "identity", fill = "mediumseagreen") +
+  labs(title = "Season 5: Participants by Age Group", x = "Age Group", y = "Count") +
+  theme_minimal()
+
+ggplotly(p3, tooltip = "text")
+
+```
+The **30–34** and **35–39** age groups have the highest participation, indicating peak engagement among young to mid-career adults.
+- Participation steadily declines with increasing age, particularly beyond the **50–54** group.
+
+## **Plot 6**. 
+
+Below stacked bar chart visualizes the number of male and female participants from each country during **Season 5** of the HYROX event.
+
+```{r}
+country_gender_counts <- s5_filtered_df %>%
+  filter(!is.na(country), !is.na(gender)) %>%
+  count(country, gender)
+
+p4 <- ggplot(country_gender_counts, aes(x = country, y = n, fill = gender,
+                                        text = paste("Country:", country,
+                                                     "<br>Gender:", gender,
+                                                     "<br>Participants:", n))) +
+  geom_bar(stat = "identity") +
+  labs(title = "Season 5: Participants by Country and Gender (Stacked)",
+       x = "Country", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(p4, tooltip = "text")
+```
+The **United Kingdom, Germany and United States** had the highest overall participation in Season 5.
+- In most countries, **male participation** significantly exceeds female participation.  
+
+## Top 10 participants in Season 5 
+```{r}
+# Ensure total_time is numeric
+s5_filtered_df <- s5_filtered_df %>%
+  mutate(total_time = as.numeric(total_time))
+
+# Get top 10 finishers who completed the race
+top10_s5 <- s5_filtered_df %>%
+  filter(completed == "Yes",                
+         !is.na(total_time), total_time > 0) %>%
+  arrange(total_time) %>%
+  slice(1:10) %>%
+  select(country, gender, age_group, total_time, event_name, nationality)
+
+# View the result
+top10_s5
+
+```
+## **Plot 7**. 
+
+Below bar chart presents the top 10 male and top 10 female finishers based on their **total time (in seconds)** during **Season 5**.The age group of each athlete is also displayed for additional context.
+
+```{r}
+# Ensure total_time is numeric
+s5_filtered_df <- s5_filtered_df %>%
+  mutate(total_time = as.numeric(total_time))
+
+# Get Top 10 per gender (only completed)
+top10_by_gender <- s5_filtered_df %>%
+  filter(completed == "Yes",            
+         !is.na(total_time), total_time > 0) %>%
+  group_by(gender) %>%
+  arrange(total_time) %>%
+  slice(1:10) %>%
+  mutate(rank = row_number()) %>%
+  ungroup()
+
+p <- ggplot(top10_by_gender, aes(
+  x = reorder(paste(gender, rank, paste0("(", age_group, ")")), -total_time),
+  y = total_time, fill = gender,
+  text = paste("Gender:", gender,
+               "<br>Rank:", rank,
+               "<br>Age Group:", age_group,
+               "<br>Time:", total_time,
+               "<br>Country:", country))) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top 10 Male and Female Performers (Season 5)",
+       x = "Gender + Rank (Age Group)", y = "Total Time (seconds)") +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+
+
+```
+The top 10 male athletes have **faster times** than the top 10 female athletes.
+- Most top male finishers belong to the **16-24** and **35-39** age groups.
+- Female top performers are spread across **25-29** and **30-34** age groups.
+
+## **Plot 8**.   
+
+Below line chart visualizes the progression of **total finishing times** for the top 10 male and female participants in Season 5, ranked from fastest (1) to 10th place.
+```{r}
+# Prepare top 10 by gender
+top10_by_gender <- s5_filtered_df %>%
+  mutate(total_time = as.numeric(total_time)) %>%
+  filter(completed == "Yes",                # Include only completed participants
+         !is.na(total_time), total_time > 0) %>%
+  group_by(gender) %>%
+  arrange(total_time) %>%
+  slice(1:10) %>%
+  mutate(rank = row_number()) %>%
+  ungroup()
+
+p1 <- ggplot(top10_by_gender, aes(x = rank, y = total_time, color = gender,
+                                  text = paste("Gender:", gender,
+                                               "<br>Rank:", rank,
+                                               "<br>Time:", total_time,
+                                               "<br>Country:", country))) +
+  geom_line(aes(group = gender)) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 1:10) +  # This sets x-axis ticks to 1–10
+  labs(title = "Top 10 Total Time by Rank (Male vs Female) - Season 5", 
+       x = "Rank", y = "Total Time (seconds)") +
+  theme_minimal()
+
+ggplotly(p1, tooltip = "text")
+
+```
+Male participants consistently had **faster finishing times** compared to female participants across all ranks.
+- The **gap between male and female times** remains steady, with female athletes taking approximately **300–400 seconds longer**.  
+
+## **Plot 9**.   
+
+Below plot shows how finishing times of the **fastest athlete** and the **average of the top 10 performers**, segmented by **gender**, have evolved across three seasons (S4, S5, S6).
+```{r}
+# Ensuring total_time is numeric and filter valid + completed entries
+filtered_df <- filtered_df %>%
+  mutate(total_time = as.numeric(total_time)) %>%
+  filter(completed == "Yes",                  # Include only completed
+         !is.na(total_time), total_time > 0)
+
+# Finding fastest performer per season by gender
+fastest_by_gender <- filtered_df %>%
+  group_by(season, gender) %>%
+  slice_min(total_time, n = 1) %>%
+  mutate(metric = "Fastest") %>%
+  select(season, gender, total_time, metric, country)
+
+# Average of top 10 per season and gender
+avg_top10_by_gender <- filtered_df %>%
+  group_by(season, gender) %>%
+  arrange(total_time) %>%
+  slice(1:10) %>%
+  summarise(total_time = mean(total_time),
+            country = NA,  # placeholder to match columns
+            .groups = "drop") %>%
+  mutate(metric = "Avg Top 10")
+
+# Combine both metrics
+top_perf_all <- bind_rows(fastest_by_gender, avg_top10_by_gender)
+
+# Plot the graph
+p <- ggplot(top_perf_all, aes(x = season, y = total_time,
+                              color = gender, linetype = metric,
+                              group = interaction(gender, metric),
+                              text = paste("Season:", season,
+                                           "<br>Gender:", gender,
+                                           "<br>Metric:", metric,
+                                           "<br>Total Time:", round(total_time, 2),
+                                           ifelse(is.na(country), "", paste("<br>Country:", country))))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Seasonal Performance: Fastest vs Avg Top 10 (by Gender)",
+       x = "Season", y = "Total Time (seconds)", color = "Gender", linetype = "Metric") +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+```
+Male participants consistently outperformed females in both fastest time and average top 10 time across all seasons.
+- Both male and female fastest times improved from Season 4 to Season 5, with males showing a more substantial gain.
+- Season 6 saw a **slight performance drop** for females (in both metrics), while male times remained relatively stable.  
+
+## **Plot 10**.  
+  
+Below density plot shows the distribution of **total finishing times** for male and female participants in **Season 5**.
+
+```{r}
+df1 <- s5_filtered_df %>%
+  filter(completed == "Yes", !is.na(gender))
+p4 <- ggplot(df1, aes(x = total_time, fill = gender)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Total Time Density by Gender - Season 5", x = "Total Time (seconds)", y = "Density") +
+  theme_minimal()
+
+ggplotly(p4)
+
+```
+Both male and female distributions are **right-skewed**, indicating that most participants finish within a certain range, with fewer taking significantly longer.
+- The plot suggests that males generally completed the race in **lesser time**.
+
+## **Plot 11**. 
+Below bar chart presents the **average total finishing time** (in seconds) of participants who completed the race, grouped by **country** in **Season 5**. 
+```{r}
+# Calculate average total_time by country (only for completed participants)
+avg_time_by_country <- s5_filtered_df %>%
+  filter(completed == "Yes", !is.na(country), !is.na(total_time), total_time > 0) %>%
+  group_by(country) %>%
+  summarise(avg_total_time = mean(total_time), .groups = "drop")
+
+# Plot bar chart of average total_time
+p_avg <- ggplot(avg_time_by_country, aes(x = reorder(country, avg_total_time),
+                                         y = avg_total_time,
+                                         text = paste("Country:", country,
+                                                      "<br>Avg Time:", round(avg_total_time, 2)))) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Average Total Time by Country (Completed Participants) - Season 5",
+       x = "Country", y = "Average Total Time (seconds)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Make it interactive
+ggplotly(p_avg, tooltip = "text")
+
+```
+**Portugal** has the **lowest average finishing time**, suggesting a generally faster performance by its participants.
+- Most European countries, such as France, Italy, Spain, Germany, and Switzerland, have **similar average times**, clustering around the middle of the performance spectrum.   
+  
+## **Plot 12**. 
+The below plot shows the **average total finishing time** (in seconds) for participants across different **age groups**  in **Season 5**.
+```{r}
+# Set desired age group order manually (as character strings)
+age_levels <- c("16-24", "25-29", "30-34", "35-39", "40-44", "45-49", 
+                "50-54", "55-59", "60-64", "65-69", "70-74", "75-79", "80-84")
+
+avg_time_by_age <- filtered_df %>%
+  filter(completed == "Yes", !is.na(age_group), !is.na(total_time), total_time > 0) %>%
+  group_by(age_group) %>%
+  summarise(avg_total_time = mean(total_time), .groups = "drop") %>%
+  mutate(age_group = factor(age_group, levels = age_levels, ordered = TRUE))
+
+# Plot
+p <- ggplot(avg_time_by_age, aes(x = age_group, y = avg_total_time,
+                                 fill = age_group,
+                                 text = paste("Age Group:", age_group,
+                                              "<br>Avg Time:", round(avg_total_time, 2)))) +
+  geom_col(show.legend = FALSE) +  # remove redundant legend
+  labs(title = "Average Total Time by Age Group (Completed Participants)",
+       x = "Age Group", y = "Average Total Time (seconds)") +
+  theme_minimal()
+
+ggplotly(p, tooltip = "text")
+```
+
+Participants aged **16–24 to 35–39** show relatively **lower average finishing times**, indicating stronger performance among younger competitors.
+- A **gradual increase in average total time** is observed starting from age group **40–44** onwards.
+- Participants in the **65–69** and **70+** age brackets have noticeably **higher average times**, which is expected due to age-related endurance variation.
+
+## **Plot 13**. 
+The below plot provides a comparison of the **average time (in seconds)** spent on each event segment by two groups in Season 5:
+- **All completed participants**
+- **Top 10 performers**
+```{r}
+
+# Time segments
+all_time_cols <- grep("run_|ski|sled|burpee|row|carry|lunges|balls|transition_", 
+                      names(filtered_df), value = TRUE)
+
+segment_labels <- all_time_cols %>%
+  gsub("_", " ", .) %>%
+  tools::toTitleCase()
+
+# Base dataset for completed participants
+df_all <- filtered_df %>%
+  filter(completed == "Yes", !is.na(total_time)) %>%
+  select(total_time, all_of(all_time_cols)) %>%
+  mutate(group = "All")
+
+# Get top 10 performers
+df_top <- df_all %>%
+  arrange(total_time) %>%
+  slice(1:10) %>%
+  mutate(group = "Top 10")
+
+# Combine both
+df_combined <- bind_rows(df_all, df_top)
+
+# Pivot to long format
+df_long <- df_combined %>%
+  pivot_longer(cols = all_of(all_time_cols), names_to = "segment_raw", values_to = "time_sec") %>%
+  filter(!is.na(time_sec), time_sec > 0) %>%
+  mutate(segment = factor(segment_raw, levels = all_time_cols, labels = segment_labels))
+
+# Remove overall totals
+df_long <- df_long %>%
+  filter(!segment %in% c("Run Time", "Total Transition Time"))
+
+# Compute averages
+avg_segment_group <- df_long %>%
+  group_by(group, segment) %>%
+  summarise(avg_time = mean(time_sec), .groups = "drop")
+
+# Plot grouped bar chart
+p <- ggplot(avg_segment_group, aes(x = segment, y = avg_time, fill = group,
+                                   text = paste("Group:", group,
+                                                "<br>Segment:", segment,
+                                                "<br>Avg Time:", round(avg_time, 2)))) +
+  geom_col(position = "dodge") +
+  labs(title = "Segment-wise Average Time: All vs Top Performers",
+       x = "Segment", y = "Average Time (seconds)", fill = "Group") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # ✅ Fix overlap
+
+
+ggplotly(p, tooltip = "text")
+
+```
+**Top performers consistently spent less time** on almost every segment, including both **runs and workout stations**.
+- Even **transition times** are significantly shorter for top performers, showcasing their efficiency in moving between stations.
+
+## **Plot 14**. 
+Below plot showcases the **segment-wise performance times** of the **top performer from each country** during Season 5. 
+```{r}
+
+# Identify time segment columns (excluding 'total_transition_time' and 'run_time')
+segment_cols <- grep("run_|ski|sled|burpee|row|carry|lunges|balls|transition_", 
+                     names(s5_filtered_df), value = TRUE)
+segment_cols <- setdiff(segment_cols, c("total_transition_time", "run_time"))
+
+# Top performer from each country (completed only)
+top_by_country <- s5_filtered_df %>%
+  filter(completed == "Yes", !is.na(country), !is.na(total_time), total_time > 0) %>%
+  group_by(country) %>%
+  slice_min(order_by = total_time, n = 1) %>%
+  ungroup() %>%
+  select(country, all_of(segment_cols))
+
+# Pivot to long format
+top_segment_long <- top_by_country %>%
+  pivot_longer(cols = -country, names_to = "segment_raw", values_to = "time_sec") %>%
+  filter(!is.na(time_sec), time_sec > 0)
+
+# Clean segment names and preserve order
+segment_labels <- segment_cols %>%
+  gsub("_", " ", .) %>%
+  tools::toTitleCase()
+
+top_segment_long <- top_segment_long %>%
+  mutate(segment = factor(segment_raw, levels = segment_cols, labels = segment_labels))
+
+# Line chart with thin lines
+p <- ggplot(top_segment_long, aes(x = segment, y = time_sec, color = country, group = country,
+                                  text = paste("Country:", country,
+                                               "<br>Segment:", segment,
+                                               "<br>Time:", round(time_sec, 2)))) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  labs(title = "Top Performer Segment Times by Country",
+       x = "Segment", y = "Time (seconds)", color = "Country") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Interactive plot
+ggplotly(p, tooltip = "text")
+
+
+```
+The plot shows variation in segment times across top performers from different countries. While run segments are generally consistent, there is noticeable disparity in workout-intensive sections like Sled Push, Sandbag Lunges, and Farmers Carry. Some athletes demonstrate particularly fast transitions, while others lose time in these areas. 
+
+## **Plot 15**.  
+
+The below plot compares the average run segment times across Season 5 for different profiles: average male, average female, overall average, and the top-performing male and female athletes. 
+
+```{r}
+# Run segment columns (excluding 'run_time')
+run_cols <- grep("^run_", names(s5_filtered_df), value = TRUE)
+run_cols <- setdiff(run_cols, "run_time")
+
+# Gender-wise average
+avg_by_gender <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  group_by(gender) %>%
+  summarise(across(all_of(run_cols), ~ mean(.x, na.rm = TRUE))) %>%
+  pivot_longer(-gender, names_to = "segment", values_to = "time_sec")
+
+# Overall average
+avg_overall <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  summarise(across(all_of(run_cols), ~ mean(.x, na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "segment", values_to = "time_sec") %>%
+  mutate(group = "Overall Avg")
+
+# Top performer by gender
+top_by_gender <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  group_by(gender) %>%
+  slice_min(total_time, n = 1) %>%
+  ungroup() %>%
+  select(gender, all_of(run_cols)) %>%
+  pivot_longer(-gender, names_to = "segment", values_to = "time_sec") %>%
+  mutate(group = paste("Top", gender))
+
+# Combine all
+combined_run <- bind_rows(
+  avg_by_gender %>% mutate(group = paste(gender, "Avg")),
+  top_by_gender,
+  avg_overall
+) %>%
+  mutate(segment = gsub("_", " ", segment),
+         segment = tools::toTitleCase(segment),
+         segment = factor(segment, levels = unique(segment)))
+
+# Plot with linetype
+p_run <- ggplot(combined_run, aes(x = segment, y = time_sec,
+                                  color = group, linetype = group, group = group,
+                                  text = paste("Group:", group,
+                                               "<br>Segment:", segment,
+                                               "<br>Time:", round(time_sec, 2)))) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  labs(title = "Run Segment Comparison (Season 5)",
+       x = "Run Segment", y = "Time (seconds)",
+       color = "Profile", linetype = "Profile") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Interactive plot
+ggplotly(p_run, tooltip = "text")
+
+```
+The top male performers consistently recorded the fastest times across all run segments, followed by top females. Average male and female times were notably higher, with female participants having the longest run times overall. A noticeable upward trend in times is seen toward later run segments (e.g., Run 8).  
+   
+## **Plot 16**.  
+
+Below plot compares the average times taken by different participant groups—average male, average female, overall average, and top-performing male and female athletes—across all major exercise segments in Season 5.
+
+```{r}
+# Define exercise segment columns
+exercise_cols <- grep("ski|sled|burpee|row|carry|lunges|balls", names(s5_filtered_df), value = TRUE)
+
+# Gender-wise average
+avg_by_gender <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  group_by(gender) %>%
+  summarise(across(all_of(exercise_cols), ~ mean(.x, na.rm = TRUE))) %>%
+  pivot_longer(-gender, names_to = "segment", values_to = "time_sec")
+
+# Overall average
+avg_overall <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  summarise(across(all_of(exercise_cols), ~ mean(.x, na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "segment", values_to = "time_sec") %>%
+  mutate(group = "Overall Avg")
+
+# Top performer by gender
+top_by_gender <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  group_by(gender) %>%
+  slice_min(total_time, n = 1) %>%
+  ungroup() %>%
+  select(gender, all_of(exercise_cols)) %>%
+  pivot_longer(-gender, names_to = "segment", values_to = "time_sec") %>%
+  mutate(group = paste("Top", gender))
+
+# Combine all
+combined_ex <- bind_rows(
+  avg_by_gender %>% mutate(group = paste(gender, "Avg")),
+  top_by_gender,
+  avg_overall
+) %>%
+  mutate(segment = gsub("_", " ", segment),
+         segment = tools::toTitleCase(segment),
+         segment = factor(segment, levels = unique(segment)))
+
+# Plot with linetype
+p_exercise <- ggplot(combined_ex, aes(x = segment, y = time_sec,
+                                      color = group, linetype = group, group = group,
+                                      text = paste("Group:", group,
+                                                   "<br>Segment:", segment,
+                                                   "<br>Time:", round(time_sec, 2)))) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  labs(title = "Exercise Segment Comparison (Season 5)",
+       x = "Exercise Segment", y = "Time (seconds)",
+       color = "Profile", linetype = "Profile") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplotly(p_exercise, tooltip = "text")
+
+```
+Top performers of both genders completed each exercise segment considerably faster than the average participants. In most segments, top male performers recorded the shortest times. However, Sled Push and Wall Balls are exceptions, where the top female performer outpaced her male counterpart. Notably, for these two segments, the top female's times were also lower than the male average, female average, and overall average—highlighting a standout performance. 
+
+## **Plot 17**.   
+
+Below plot compares the average time taken in each transition segment during Season 5 across different profiles: top male performers, top female performers, male average, female average, and overall average. Transitions refer to the periods between workout and run segments, and this breakdown helps assess how efficiently participants manage these interludes.
+
+
+```{r}
+# Define transition columns and remove 'total_transition_time' and 'transition_time_8'
+transition_cols <- grep("transition_", names(s5_filtered_df), value = TRUE)
+transition_cols <- setdiff(transition_cols, c("total_transition_time", "transition_time_8"))
+
+# Gender-wise average
+avg_by_gender <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  group_by(gender) %>%
+  summarise(across(all_of(transition_cols), ~ mean(.x, na.rm = TRUE))) %>%
+  pivot_longer(-gender, names_to = "segment", values_to = "time_sec")
+
+# Overall average
+avg_overall <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  summarise(across(all_of(transition_cols), ~ mean(.x, na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "segment", values_to = "time_sec") %>%
+  mutate(group = "Overall Avg")
+
+# Top performer by gender
+top_by_gender <- s5_filtered_df %>%
+  filter(completed == "Yes") %>%
+  group_by(gender) %>%
+  slice_min(total_time, n = 1) %>%
+  ungroup() %>%
+  select(gender, all_of(transition_cols)) %>%
+  pivot_longer(-gender, names_to = "segment", values_to = "time_sec") %>%
+  mutate(group = paste("Top", gender))
+
+# Combine all
+combined_trans <- bind_rows(
+  avg_by_gender %>% mutate(group = paste(gender, "Avg")),
+  top_by_gender,
+  avg_overall
+) %>%
+  mutate(segment = gsub("_", " ", segment),
+         segment = tools::toTitleCase(segment),
+         segment = factor(segment, levels = unique(segment)))
+
+# Plot with linetype
+p_transition <- ggplot(combined_trans, aes(x = segment, y = time_sec,
+                                           color = group, linetype = group, group = group,
+                                           text = paste("Group:", group,
+                                                        "<br>Segment:", segment,
+                                                        "<br>Time:", round(time_sec, 2)))) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  labs(title = "Transition Segment Comparison (Season 5)",
+       x = "Transition Segment", y = "Time (seconds)",
+       color = "Profile", linetype = "Profile") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Interactive plot
+ggplotly(p_transition, tooltip = "text")
+
+```
+Top performers from both genders consistently completed transition segments faster than the average participants. Top male performers exhibited the lowest transition times overall, often outperforming both the top female performers and all averages. While female averages were slightly higher across most segments, the gap between top and average performers is notably larger, especially from Transition Time 3 onward, indicating better pacing and time management among top-tier athletes.
+
+## **Plot 18**. 
+
+Below boxplot visualizes the distribution of total finishing times for male and female participants across different countries. Each box represents the interquartile range (IQR), with the horizontal line indicating the median, and the whiskers extending to the non-outlier range. Outliers are shown as individual points.
+```{r}
+# Filter dataset
+df <- s5_filtered_df %>%
+  filter(completed == "Yes", !is.na(country), !is.na(gender), !is.na(total_time))
+
+# Create improved boxplot
+p_gender_box <- ggplot(df, aes(x = country, y = total_time,
+                               fill = gender, color = gender, group = interaction(country, gender),
+                               text = paste("Country:", country,
+                                            "<br>Gender:", gender,
+                                            "<br>Time (sec):", round(total_time, 2)))) +
+  geom_boxplot(position = position_dodge(width = 0.75),
+               alpha = 0.6, outlier.alpha = 0.2) +
+  labs(title = "Finishing Time by Gender Across Countries",
+       x = "Country", y = "Total Time (seconds)",
+       fill = "Gender", color = "Gender") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Make it interactive
+ggplotly(p_gender_box, tooltip = "text")
+
+
+```
+Across the majority of countries, male participants generally outperform female participants, as shown by lower median finishing times and narrower interquartile ranges (IQRs). In contrast, female participants exhibit a wider spread in performance, with more extreme outliers, especially in the United States, Germany, and the United Kingdom. An exception to this trend is seen in Sweden, where female participants outperformed their male counterparts, standing out from the overall pattern.
+
+```{r}
+# Save the updated dataset
+
+write_excel_csv(df, "hyrox_results_updated_V1.csv") # Added new fields
+write_excel_csv(hyrox_df, "hyrox_results_updated_V2.csv") # Time in seconds
+write_excel_csv(filtered_df, "hyrox_results_updated_V3.csv") # Top countries for open
+write_excel_csv(s5_filtered_df, "hyrox_results_updated_V4.csv") # Top countries for open S5
+
+```
