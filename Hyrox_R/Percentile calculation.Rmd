@@ -8,6 +8,7 @@ output:
 ---
 ```{r}
 #install.packages("countrycode")
+#install.packages("rsample")
 ```
 
 ```{r setup,include=FALSE}
@@ -15,6 +16,9 @@ knitr::opts_chunk$set(echo = TRUE)
 # Load necessary libraries
 library(readr)
 library(dplyr)
+library(tidyverse)
+library(rsample)
+library(randomForest)
 ```
 ## Percentile value for both Male and Female participants in UK
 ```{r}
@@ -58,3 +62,59 @@ percentile_table <- bind_rows(percentiles_women, percentiles_men)
 print(percentile_table)
 ```
 
+```{r}
+
+# Select model features: demographic + functional stations + run_1
+hyrox_model_data <- df_uk_completed %>%
+  select(
+    total_time,
+    gender,
+    age_group,
+    nationality,
+    ski_erg,
+    sled_push,
+    sled_pull,
+    burpee_broad_jumps,
+    rowing,
+    wall_balls,
+    run_1
+  ) %>%
+  drop_na() %>%
+  mutate(across(c(gender, age_group, nationality), as.factor))
+
+# Split into training and test sets (80/20)
+set.seed(1116)
+data_split <- initial_split(hyrox_model_data, prop = 0.8)
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+
+# Train the Random Forest model
+rf_model <- randomForest(total_time ~ ., data = train_data, ntree = 500, importance = TRUE)
+
+# Predict on the test data
+test_results <- test_data %>%
+  select(total_time) %>%
+  mutate(predicted_time = predict(rf_model, newdata = test_data))
+
+# Visualize actual vs predicted
+ggplot(test_results, aes(x = total_time, y = predicted_time)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(
+    title = "Random Forest: Actual vs Predicted Total Time",
+    x = "Actual Total Time (sec)",
+    y = "Predicted Total Time (sec)"
+  )
+
+```
+```{r}
+# Summarise model accuracy
+test_results %>%
+  summarise(
+    mean_error = mean(total_time - predicted_time),
+    mean_abs_error = mean(abs(total_time - predicted_time)),
+    rmse = sqrt(mean((total_time - predicted_time)^2)),
+    r_squared = cor(total_time, predicted_time)^2
+  )
+
+```
