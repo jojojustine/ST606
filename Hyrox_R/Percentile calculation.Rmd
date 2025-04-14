@@ -118,3 +118,12 @@ test_results %>%
   )
 
 ```
+```{r}
+importance_df <- as.data.frame(importance(rf_model))
+importance_df$Feature <- rownames(importance_df)
+
+ggplot(importance_df, aes(x = reorder(Feature, `%IncMSE`), y = `%IncMSE`)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Feature Importance (%IncMSE)", x = "Feature", y = "Importance")
+```
