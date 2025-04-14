@@ -799,11 +799,11 @@ Top performers from both genders consistently completed transition segments fast
 Below boxplot visualizes the distribution of total finishing times for male and female participants across different countries. Each box represents the interquartile range (IQR), with the horizontal line indicating the median, and the whiskers extending to the non-outlier range. Outliers are shown as individual points.
 ```{r}
 # Filter dataset
-df <- s5_filtered_df %>%
+total_finishing_time <- s5_filtered_df %>%
   filter(completed == "Yes", !is.na(country), !is.na(gender), !is.na(total_time))
 
 # Create improved boxplot
-p_gender_box <- ggplot(df, aes(x = country, y = total_time,
+p_gender_box <- ggplot(total_finishing_time, aes(x = country, y = total_time,
                                fill = gender, color = gender, group = interaction(country, gender),
                                text = paste("Country:", country,
                                             "<br>Gender:", gender,

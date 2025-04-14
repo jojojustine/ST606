@@ -1,0 +1,60 @@
+---
+title: "Percentile Calculation Hyrox Dataset"
+author: "Jojo Justine"
+date: "2025-04-14"
+output:
+  html_document:
+    code_folding: hide
+---
+```{r}
+#install.packages("countrycode")
+```
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(readr)
+library(dplyr)
+```
+## Percentile value for both Male and Female participants in UK
+```{r}
+# Read the CSV file
+df <- read.csv("hyrox_results_updated_V4.csv")
+
+# Filter for UK participants who completed the race and have valid total_time
+df_uk_completed <- df %>%
+  filter(tolower(country) == "united kingdom",
+         tolower(completed) == "yes",
+         !is.na(total_time),
+         total_time > 0,
+         tolower(gender) %in% c("male", "female"))
+
+# Define percentile steps
+percentile_levels <- seq(0, 1, by = 0.05)
+
+# Function to calculate percentiles for a gender
+get_percentile_table <- function(data, gender_label) {
+  data_gender <- data %>%
+    filter(tolower(gender) == tolower(gender_label))
+
+  percentile_values <- quantile(data_gender$total_time, probs = percentile_levels)
+
+  data.frame(
+    Gender = gender_label,
+    Percentile = percentile_levels * 100,
+    Total_Time_Seconds = as.numeric(percentile_values),
+    Total_Time_Minutes = round(as.numeric(percentile_values) / 60, 2)
+  )
+}
+
+# Calculate percentile tables for men and women
+percentiles_women <- get_percentile_table(df_uk_completed, "female")
+percentiles_men   <- get_percentile_table(df_uk_completed, "male")
+
+# Combine into one table
+percentile_table <- bind_rows(percentiles_women, percentiles_men)
+
+# View the result
+print(percentile_table)
+```
+
