@@ -1,0 +1,271 @@
+---
+title: "Model Creation Hyrox Dataset"
+author: "Jojo Justine"
+date: "2025-06-02"
+output:
+  html_document:
+    code_folding: hide
+---
+```{r}
+#install.packages("countrycode")
+#install.packages("rsample")
+#install.packages("fmsb")
+#install.packages("factoextra")
+```
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(rsample)
+library(randomForest)
+library(cluster)
+library(factoextra)
+library(broom)
+```
+## Creating Linear Model
+```{r}
+
+# Read the CSV file
+df <- read.csv("hyrox_results_updated_V4.csv")
+
+# Filter for completed athletes
+df_completed <- df %>%
+  filter(completed == "Yes")
+
+# Define predictor columns
+predictors <- c(
+  paste0("run_", 1:8),
+  "ski_erg", "sled_push", "sled_pull", "burpee_broad_jumps",
+  "rowing", "farmers_carry", "sandbag_lunges", "wall_balls",
+  "gender", "nationality", "age_group"
+)
+
+# Select and clean data
+df_model <- df_completed %>%
+  select(all_of(predictors), total_time) %>%
+  drop_na() %>%
+  mutate(
+    gender = as.factor(gender),
+    nationality = as.factor(nationality),
+    age_group = as.factor(age_group)
+  )
+
+# Split into training and testing sets
+set.seed(1234)
+data_split <- initial_split(df_model, prop = 0.8)
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+# Train a linear regression model
+lm_model <- lm(total_time ~ ., data = train_data)
+
+# Predict on test data
+test_results <- test_data %>%
+  select(total_time) %>%
+  mutate(pred_time = predict(lm_model, newdata = test_data))
+
+# Plot predicted vs actual total time
+ggplot(test_results, aes(x = total_time, y = pred_time)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "black") +
+  labs(title = "Predicted vs Actual Total Time",
+       x = "Actual Total Time", y = "Predicted Total Time") +
+  theme_minimal()
+
+# Summarise model accuracy
+# Mean Error
+lm_mean_error <- mean(test_results$total_time - test_results$pred_time)
+cat("Mean Error:", lm_mean_error, "\n")
+
+# Mean Absolute Error
+lm_mean_abs_error <- mean(abs(test_results$total_time - test_results$pred_time))
+cat("Mean Absolute Error:", lm_mean_abs_error, "\n")
+
+# RMSE
+lm_rmse <- sqrt(mean((test_results$total_time - test_results$pred_time)^2))
+cat("RMSE:", lm_rmse, "\n")
+
+# R-squared and Adjusted R²
+lm_r2 <- cor(test_results$total_time, test_results$pred_time)^2
+cat("R²:", lm_r2, "\n")
+cat("Adjusted R²:", summary(lm_model)$adj.r.squared, "\n")
+
+# MAPE
+lm_mape <- mean(abs((test_results$total_time - test_results$pred_time) / test_results$total_time)) * 100
+cat("MAPE (%):", lm_mape, "\n")
+
+# Residual Plot
+ggplot(test_results, aes(x = pred_time, y = total_time - pred_time)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(x = "Predicted Total Time", y = "Residuals",
+       title = "Residual Plot") +
+  theme_minimal()
+
+# ANOVA Table
+anova_table <- anova(lm_model)
+print(anova_table)
+
+# Standardize predictors (but not target)
+predictors_scaled <- df_model %>%
+  select(-total_time) %>%
+  mutate(across(where(is.numeric), scale))  # only scale numeric columns
+
+df_scaled <- bind_cols(predictors_scaled, total_time = df_model$total_time)
+
+# Fit linear model on scaled data
+lm_scaled <- lm(total_time ~ ., data = df_scaled)
+
+# Extract and group coefficients
+coef_df <- tidy(lm_scaled) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(abs_estimate = abs(estimate),
+         term_grouped = case_when(
+           str_detect(term, "age_group") ~ "age_group",
+           str_detect(term, "nationality") ~ "nationality",
+           str_detect(term, "gender") ~ "gender",
+           TRUE ~ term  # keep other terms (runs, exercises) as-is
+         )) %>%
+  group_by(term_grouped) %>%
+  summarise(importance = mean(abs_estimate)) %>%
+  arrange(desc(importance))
+
+# Plot grouped feature importance
+ggplot(coef_df, aes(x = reorder(term_grouped, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Grouped Feature Importance (Standardized Coefficients)",
+       x = "Feature", y = "Total Absolute Coefficient (Grouped)") +
+  theme_minimal()
+```
+  
+## Creating Random Forest Model
+```{r}
+
+# Load and filter data
+df <- read.csv("hyrox_results_updated_V4.csv")
+
+df_completed <- df %>%
+  filter(completed == "Yes")
+
+# Define predictor columns
+predictors <- c(
+  paste0("run_", 1:8),
+  "ski_erg", "sled_push", "sled_pull", "burpee_broad_jumps",
+  "rowing", "farmers_carry", "sandbag_lunges", "wall_balls",
+  "gender", "nationality", "age_group"
+)
+
+# Prepare dataset
+df_model <- df_completed %>%
+  select(all_of(predictors), total_time) %>%
+  drop_na() %>%
+  mutate(
+    gender = as.factor(gender),
+    nationality = as.factor(nationality),
+    age_group = as.factor(age_group)
+  )
+
+# Split into training and testing sets
+set.seed(1234)
+data_split <- initial_split(df_model, prop = 0.8)
+train_data <- training(data_split)
+test_data <- testing(data_split)
+
+# Train the Random Forest model
+set.seed(42)
+rf_model <- randomForest(total_time ~ ., data = train_data, ntree = 500, importance = TRUE)
+
+# Predict on test data
+test_data$pred_time <- predict(rf_model, newdata = test_data)
+
+# Plot predicted vs actual
+ggplot(test_data, aes(x = total_time, y = pred_time)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "black") +
+  labs(title = "Predicted vs Actual Total Time (Random Forest)",
+       x = "Actual Total Time", y = "Predicted Total Time") +
+  theme_minimal()
+
+# Evaluate model performance
+rf_mean_error = mean(test_data$total_time - test_data$pred_time)
+rf_mean_abs_error = mean(abs(test_data$total_time - test_data$pred_time))
+rf_rmse <- sqrt(mean((test_data$total_time - test_data$pred_time)^2))
+rf_r2 <- cor(test_data$total_time, test_data$pred_time)^2
+rf_mape <- mean(abs((test_data$total_time - test_data$pred_time) / test_data$total_time)) * 100
+
+# Print metrics
+cat("Mean Error:", rf_mean_error, "\n")
+cat("Mean Abs Error:", rf_mean_abs_error, "\n")
+cat("RMSE:", rf_rmse, "\n")
+cat("R²:", rf_r2, "\n")
+cat("MAPE (%):", rf_mape, "\n")
+
+# Compute residuals
+test_data$residual <- test_data$total_time - test_data$pred_time
+
+# Residual plot
+ggplot(test_data, aes(x = pred_time, y = residual)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Residual Plot (Random Forest)",
+       x = "Predicted Total Time", y = "Residual (Actual - Predicted)") +
+  theme_minimal()
+
+# Feature Importance Plot (%IncMSE)
+importance_df <- as.data.frame(importance(rf_model, type = 1)) %>%
+  rownames_to_column("Feature") %>%
+  arrange(desc(`%IncMSE`))
+
+ggplot(importance_df, aes(x = reorder(Feature, `%IncMSE`), y = `%IncMSE`)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Random Forest Feature Importance (%IncMSE)",
+       x = "Feature", y = "% Increase in MSE") +
+  theme_minimal()
+
+```
+
+## Prediction Comparisson - Random Forest Vs Linear Model. 
+
+**Summary Table**
+```{r}
+# Create summary table
+model_comparison <- data.frame(
+  Model = c("Linear Regression", "Random Forest"),
+  RMSE = c(round(lm_rmse, 2), round(rf_rmse, 2)),
+  R_squared = c(round(lm_r2, 4), round(rf_r2, 4)),
+  MAPE_Percent = c(round(lm_mape, 2), round(rf_mape, 2)),
+  Mean_Error = c(round(lm_mean_error, 2), round(rf_mean_error, 2)),
+  Mean_Abs_Error = c(round(lm_mean_abs_error, 2), round(rf_mean_abs_error, 2))
+)
+
+# Display as nice table
+knitr::kable(model_comparison, caption = "Model Performance Comparison: Linear vs Random Forest")
+
+```
+   
+**Prediction Comparison Plot - Random Forest Vs Linear Model**  
+```{r}
+# Create a combined dataframe for prediction comparison
+df_results <- test_data %>%
+  select(total_time) %>%
+  mutate(
+    pred_lm = predict(lm_model, newdata = test_data),
+    pred_rf = predict(rf_model, newdata = test_data)
+  )
+ggplot(df_results, aes(x = total_time)) +
+  geom_point(aes(y = pred_lm, color = "Linear"), alpha = 0.5) +
+  geom_point(aes(y = pred_rf, color = "Random Forest"), alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Prediction Comparison", y = "Predicted Total Time", x = "Actual Total Time", color = "Model") +
+  theme_minimal()
+
+```
+
+
+
