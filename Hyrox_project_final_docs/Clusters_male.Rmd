@@ -1,0 +1,337 @@
+---
+title: "Cluster Creation Hyrox Dataset - Male"
+author: "Jojo Justine"
+date: "2025-06-02"
+output:
+  html_document:
+    code_folding: hide
+---
+```{r}
+#install.packages("countrycode")
+#install.packages("rsample")
+#install.packages("fmsb")
+#install.packages("factoextra")
+
+```
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(rsample)
+library(randomForest)
+library(cluster)
+library(factoextra)
+```
+## Countries with more than 100 participants
+
+```{r}
+# Read the CSV file
+df <- read.csv("hyrox_results_updated_V4.csv")
+
+# Filter completed races for male participants and valid total times
+df_filtered <- df %>%
+  filter(gender == "male",
+         completed == "Yes",
+         !is.na(total_time)) %>%
+  filter(if_all(starts_with("run_"), ~ .x > 60))  # Exclude unrealistic values
+
+# Define the event columns
+event_columns <- c(
+  "total_time",
+  "run_1", "ski_erg",
+  "run_2", "sled_push",
+  "run_3", "sled_pull",
+  "run_4", "burpee_broad_jumps",
+  "run_5", "rowing",
+  "run_6", "farmers_carry",
+  "run_7", "sandbag_lunges",
+  "run_8", "wall_balls"
+)
+
+# Extract relevant columns for clustering and drop NAs
+event_data <- df_filtered %>%
+  select(all_of(event_columns)) %>%
+  drop_na()
+
+# Scale the data for clustering
+event_scaled <- scale(event_data)
+
+# Use fviz_nbclust to find the optimal number of clusters with the elbow method
+fviz_nbclust(event_scaled, kmeans, method = "wss",
+             k.max = 10,
+             nstart = 10,
+             diss = NULL) +
+  labs(title = "Elbow Method for Optimal K")
+
+# Use fviz_nbclust to find the optimal number of clusters with the silhouette method
+fviz_nbclust(event_scaled, kmeans, method = "silhouette",
+             k.max = 10, nstart = 10) +
+  labs(title = "Silhouette Method for Optimal K",
+       x = "Number of Clusters K",
+       y = "Average Silhouette Width")
+```
+
+We are classifying pacing strategies into three performance tiers: top, average, and bottom.
+
+```{r}
+# Apply k-means clustering (with k = 3)
+set.seed(42)
+km <- kmeans(run_scaled, centers = 3, nstart = 25)
+
+# Add cluster labels to the full dataset
+df_clustered <- df_filtered %>%
+  filter(!is.na(run_1)) %>%
+  mutate(Cluster = factor(km$cluster))
+
+# Pivot data for plotting
+df_long <- df_clustered %>%
+  select(all_of(run_columns), Cluster) %>%
+  pivot_longer(-Cluster, names_to = "Run", values_to = "Time")
+
+# Convert Run to numeric index and keep the label
+df_long <- df_long %>%
+  mutate(Run_num = as.numeric(gsub("run_", "", Run)),
+         Run_label = paste0("Run ", Run_num))
+
+ggplot(df_long, aes(x = Run_num, y = Time, color = Cluster, group = Cluster)) +
+  stat_summary(fun = mean, geom = "line", size = 1.3) +
+  stat_summary(fun = mean, geom = "point", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", size = 1) +
+  scale_x_continuous(breaks = 1:8, labels = paste0("Run ", 1:8)) +  # Set correct x-axis
+  labs(title = "Pacing Strategy by Cluster (K=3) - Male",
+       subtitle = "Based on Run Segment Times",
+       y = "Average Run Time (seconds)",
+       x = "Run Segment") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 11))
+```
+  
+Added Regression lines to each clusters.  
+Cluster 2 (Green) has lowest run times throughout, consistently around 300–350 seconds.This has the most consistent pacing strategy, with only slight increases and stable pacing across all run segments.  
+Run 8 takes longer for everyone, across all clusters. This suggests it’s a tough part of the race—probably because athletes are tired, close to the finish, or just completed a hard workout like the sandbag lunges
+  
+  
+**Individual Pacing Lines by Cluster**
+```{r}
+
+# Prepare long format for individual trajectories
+df_long_individual <- df_clustered %>%
+  select(all_of(run_columns), Cluster) %>%
+  mutate(AthleteID = row_number()) %>%
+  pivot_longer(cols = starts_with("run_"), names_to = "Run", values_to = "Time")
+
+# Plot individual lines with transparency, grouped by cluster
+ggplot(df_long_individual, aes(x = Run, y = Time, group = AthleteID, color = Cluster)) +
+  geom_line(alpha = 0.2) +  # Keep individual pacing lines clearly visible
+  stat_summary(aes(group = Cluster), fun = mean, geom = "line", size = 2.5, alpha = 1) +  # Thicker average line
+  stat_summary(aes(group = Cluster), fun = mean, geom = "point", size = 3, shape = 21, fill = "white", stroke = 1.2) +  # Highlighted average points
+  labs(title = "Individual Pacing Trajectories by Cluster - Male",
+       subtitle = "Filtered: Only valid finishers | Bold lines = cluster average",
+       x = "Run Segment", y = "Run Time (seconds)") +
+  scale_y_continuous(limits = c(0, NA), expand = c(0, 0)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 11))
+
+```
+  
+The bold lines with white circles represent the average pacing trajectory for each cluster. The thin transparent lines show individual runners’ pacing.Green cluster runners are tightly packed, showing very similar pacing and better control.  
+
+```{r}
+df_clustered %>%
+  mutate(Early = rowMeans(select(., run_1:run_4), na.rm = TRUE),
+         Late = rowMeans(select(., run_5:run_8), na.rm = TRUE)) %>%
+  ggplot(aes(x = Early, y = Late, color = Cluster)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Early vs Late Race Average Pace - Male",
+       x = "Average Run Time (Run 1–4)",
+       y = "Average Run Time (Run 5–8)") +
+  theme_minimal()
+
+```
+  
+The above plot compares each athlete's average run time during the first half of the race (Runs 1–4) to their average run time in the second half (Runs 5–8), grouped by cluster. Athletes in the green cluster maintained a very steady pace and are the fastest.  
+
+
+**Clustering Including total_time along with individual run times**
+```{r}
+# Add total_time to run splits
+run_columns <- paste0("run_", 1:8)
+cluster_data <- df_filtered %>%
+  select(all_of(run_columns), total_time) %>%
+  drop_na()
+
+# Scale all columns
+cluster_scaled <- scale(cluster_data)
+
+# Apply K-means
+set.seed(42)
+km_with_total <- kmeans(cluster_scaled, centers = 3, nstart = 25)
+
+# Assign back to original filtered data
+df_clustered <- df_filtered %>%
+  filter(!is.na(run_1)) %>%
+  mutate(Cluster = factor(km_with_total$cluster))
+
+# Prepare long format for pacing plot
+df_long_total <- df_clustered %>%
+  select(all_of(run_columns), Cluster) %>%
+  pivot_longer(cols = all_of(run_columns), names_to = "Run", values_to = "Time")
+
+df_long_total <- df_long_total %>%
+  mutate(Run_num = as.numeric(gsub("run_", "", Run)))
+
+ggplot(df_long_total, aes(x = Run_num, y = Time, color = Cluster, group = Cluster)) +
+  stat_summary(fun = mean, geom = "line", size = 1.3) +         # Mean pacing line
+  stat_summary(fun = mean, geom = "point", size = 2) +          # Mean points
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", size = 1) +  # Regression line
+  scale_x_continuous(breaks = 1:8, labels = paste0("Run ", 1:8)) +
+  labs(title = "Pacing Strategy by Cluster (With total_time in Clustering) - Male",
+       subtitle = "Average run segment times across clusters",
+       y = "Run Time (seconds)", x = "Run Segment") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+df_clustered %>%
+  mutate(Early = rowMeans(select(., run_1:run_4), na.rm = TRUE),
+         Late = rowMeans(select(., run_5:run_8), na.rm = TRUE)) %>%
+  ggplot(aes(x = Early, y = Late, color = Cluster)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(linetype = "dashed") +
+  labs(title = "Early vs Late Run Average by Cluster (total_time included) - Male",
+       x = "Average Run 1–4 Time", y = "Average Run 5–8 Time") +
+  theme_minimal()
+
+```
+
+```{r}
+# Define columns (clustering includes total_time)
+event_columns <- c(
+  "total_time",
+  "run_1", "ski_erg",
+  "run_2", "sled_push",
+  "run_3", "sled_pull",
+  "run_4", "burpee_broad_jumps",
+  "run_5", "rowing",
+  "run_6", "farmers_carry",
+  "run_7", "sandbag_lunges",
+  "run_8", "wall_balls"
+)
+
+# Prepare data and scale
+event_data <- df_filtered %>%
+  select(all_of(event_columns)) %>%
+  drop_na()
+
+event_scaled <- scale(event_data)
+
+# Perform K-means clustering
+set.seed(42)
+km_events <- kmeans(event_scaled, centers = 3, nstart = 25)
+
+# Add cluster info
+df_clustered_events <- df_filtered %>%
+  filter(!is.na(run_1)) %>%
+  mutate(Cluster = factor(km_events$cluster))
+
+# Prepare data for plotting (exclude total_time)
+plot_columns <- event_columns[event_columns != "total_time"]
+
+df_long_events <- df_clustered_events %>%
+  select(all_of(plot_columns), Cluster) %>%
+  pivot_longer(cols = all_of(plot_columns), names_to = "Event", values_to = "Time")
+
+# Add event index for regression
+df_long_events <- df_long_events %>%
+  mutate(Event = factor(Event, levels = plot_columns),
+         Event_num = as.numeric(Event))  # For regression
+
+# Plot with regression lines
+ggplot(df_long_events, aes(x = Event_num, y = Time, color = Cluster, group = Cluster)) +
+  stat_summary(fun = mean, geom = "line", size = 0.8) +  # Cluster average lines
+  stat_summary(fun = mean, geom = "point", aes(shape = Cluster), size = 2.5) +  # Cluster average points
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", size = 1) +  # Regression lines per cluster
+  scale_x_continuous(breaks = 1:length(plot_columns), labels = plot_columns) +  # Match event labels
+  labs(title = "Complete Performance Profile by Cluster - Male",
+       subtitle = "With Regression Lines — Runs and Workouts Only",
+       y = "Time (seconds)", x = "Event Segment") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 11))
+
+```
+  
+The above plot shows how each cluster performed across all running and workout events. The red group (Cluster 1) was the fastest and most consistent, with lower times throughout. The blue group (Cluster 3) was in the middle, showing steady pacing but slightly slower. The green group (Cluster 2) was the slowest overall and showed the most variation, with major slowdowns in events like burpee broad jumps and run 8, suggesting they struggled more in the later and more demanding parts of the race. The dotted lines (regression) show that slower groups tend to slow down even more over time.
+
+```{r}
+# Define full and functional event columns
+event_columns <- c(
+  "total_time",
+  "run_1", "ski_erg",
+  "run_2", "sled_push",
+  "run_3", "sled_pull",
+  "run_4", "burpee_broad_jumps",
+  "run_5", "rowing",
+  "run_6", "farmers_carry",
+  "run_7", "sandbag_lunges",
+  "run_8", "wall_balls"
+)
+
+functional_events <- c(
+  "ski_erg", "sled_push", "sled_pull", "burpee_broad_jumps",
+  "rowing", "farmers_carry", "sandbag_lunges", "wall_balls"
+)
+
+# Prepare data and scale
+event_data <- df_filtered %>%
+  select(all_of(event_columns)) %>%
+  drop_na()
+
+event_scaled <- scale(event_data)
+
+# Perform K-means clustering
+set.seed(42)
+km_events <- kmeans(event_scaled, centers = 3, nstart = 25)
+
+# Assign cluster to original dataset
+df_clustered_events <- df_filtered %>%
+  filter(!is.na(run_1)) %>%
+  mutate(Cluster = factor(km_events$cluster))
+
+# Prepare long-format data for functional events only
+df_long_functional <- df_clustered_events %>%
+  select(all_of(functional_events), Cluster) %>%
+  pivot_longer(cols = all_of(functional_events), names_to = "Event", values_to = "Time") %>%
+  mutate(Event = factor(Event, levels = functional_events),
+         Event_num = as.numeric(Event))  # Needed for regression
+
+# Plot
+ggplot(df_long_functional, aes(x = Event_num, y = Time, color = Cluster, group = Cluster)) +
+  stat_summary(fun = mean, geom = "line", size = 0.8) +
+  stat_summary(fun = mean, geom = "point", aes(shape = Cluster), size = 2.5) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", size = 1) +
+  scale_x_continuous(breaks = 1:8, labels = functional_events) +
+  labs(title = "Functional Event Performance by Cluster - Male",
+       subtitle = "Excludes Running Segments and Total Time",
+       y = "Time (seconds)", x = "Functional Workout Event") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 11))
+```
+  
+The red group (Cluster 1) performed the best overall, with the fastest times across almost all functional workout events. The blue group (Cluster 3) was slower but fairly consistent. The green group (Cluster 2) was the slowest, with large spikes in events like burpee broad jumps, and sandbag lunges showing that they struggled the most in those workouts.
+
+

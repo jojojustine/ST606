@@ -1,0 +1,174 @@
+---
+title: "Model Creation Hyrox Dataset"
+author: "Jojo Justine"
+date: "2025-06-02"
+output:
+  html_document:
+    code_folding: hide
+---
+```{r}
+#install.packages("countrycode")
+#install.packages("rsample")
+#install.packages("fmsb")
+#install.packages("factoextra")
+#install.packages("sjPlot")
+```
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(rsample)
+library(randomForest)
+library(cluster)
+library(factoextra)
+library(broom)
+library(sjPlot)
+library(caret)
+library(xgboost)
+```
+
+## Creating XGBoost Model
+```{r}
+
+# Load Data
+df <- read.csv("hyrox_results_updated_V4.csv")
+
+# Filter Completed Athletes & Add Percentile
+df_completed <- df %>%
+  filter(tolower(completed) == "yes") %>%
+  mutate(
+    percentile = ecdf(total_time)(total_time) * 100,
+    gender = as.factor(gender),
+    nationality = as.factor(nationality),
+    age_group = as.factor(age_group)
+  )
+
+# Define Predictors
+predictors <- c(
+  paste0("run_", 1:8),
+  "ski_erg", "sled_push", "sled_pull", "burpee_broad_jumps",
+  "rowing", "farmers_carry", "sandbag_lunges", "wall_balls",
+  "gender", "nationality", "age_group"
+)
+
+df_model <- df_completed %>%
+  select(all_of(predictors), percentile) %>%
+  drop_na()
+
+# Encode Categorical Variables
+dummies <- dummyVars(~ gender + nationality + age_group, data = df_model)
+df_dummies <- predict(dummies, df_model)
+
+df_final <- df_model %>%
+  select(run_1:wall_balls) %>%
+  bind_cols(as.data.frame(df_dummies)) %>%
+  mutate(percentile = df_model$percentile)
+
+# Train-Test Split
+set.seed(1234)
+train_idx <- createDataPartition(df_final$percentile, p = 0.8, list = FALSE)
+train_data <- df_final[train_idx, ]
+test_data  <- df_final[-train_idx, ]
+
+# Convert to Matrix
+X_train <- as.matrix(train_data %>% select(-percentile))
+y_train <- train_data$percentile
+X_test  <- as.matrix(test_data %>% select(-percentile))
+y_test  <- test_data$percentile
+
+# Train XGBoost Regression Model
+xgb_model <- xgboost(
+  data = X_train,
+  label = y_train,
+  nrounds = 300,
+  max_depth = 6,
+  eta = 0.1,
+  objective = "reg:squarederror",
+  eval_metric = "rmse",
+  verbose = 0
+)
+
+# Predictions on Test Data
+test_data <- test_data %>%
+  mutate(pred_percentile = predict(xgb_model, X_test))
+
+# Accuracy Metrics
+mean_error <- mean(test_data$percentile - test_data$pred_percentile)
+mean_abs_error <- mean(abs(test_data$percentile - test_data$pred_percentile))
+rmse <- sqrt(mean((test_data$percentile - test_data$pred_percentile)^2))
+r2 <- cor(test_data$percentile, test_data$pred_percentile)^2
+mape <- mean(abs((test_data$percentile - test_data$pred_percentile) / test_data$percentile)) * 100
+
+cat("Mean Error:", mean_error, "\n")
+cat("Mean Absolute Error:", mean_abs_error, "\n")
+cat("RMSE:", rmse, "\n")
+cat("R²:", r2, "\n")
+cat("MAPE (%):", mape, "\n")
+
+# Predicted vs Actual Plot
+ggplot(test_data, aes(x = percentile, y = pred_percentile)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "black") +
+  labs(title = "Predicted vs Actual Percentile (XGBoost)",
+       x = "Actual Percentile", y = "Predicted Percentile") +
+  theme_minimal()
+
+# Residual Plot
+ggplot(test_data, aes(x = pred_percentile, y = percentile - pred_percentile)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red") +
+  labs(x = "Predicted Percentile", y = "Residuals",
+       title = "Residual Plot (XGBoost)") +
+  theme_minimal()
+
+# Feature Importance
+importance <- xgb.importance(model = xgb_model)
+xgb.plot.importance(importance_matrix = importance)
+
+# Grouped Feature Importance (like Linear Model)
+importance_df <- importance %>%
+  mutate(
+    FeatureGroup = case_when(
+      grepl("gender", Feature) ~ "gender",
+      grepl("nationality", Feature) ~ "nationality",
+      grepl("age_group", Feature) ~ "age_group",
+      TRUE ~ Feature
+    )
+  ) %>%
+  group_by(FeatureGroup) %>%
+  summarise(importance = mean(Gain), .groups = "drop") %>%
+  arrange(desc(importance))
+
+ggplot(importance_df, aes(x = reorder(FeatureGroup, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Grouped Feature Importance (XGBoost Gain)",
+       x = "Feature", y = "Mean Gain") +
+  theme_minimal()
+
+# Predict Percentile for a New Athlete
+new_athlete <- data.frame(
+  run_1 = 250, run_2 = 270, run_3 = 260, run_4 = 280,
+  run_5 = 270, run_6 = 265, run_7 = 275, run_8 = 260,
+  ski_erg = 200, sled_push = 350, sled_pull = 340,
+  burpee_broad_jumps = 300, rowing = 250, farmers_carry = 220,
+  sandbag_lunges = 280, wall_balls = 260,
+  gender = "male", nationality = "Ireland", age_group = "30-34"
+)
+
+# Match factor levels
+new_athlete$gender <- factor(new_athlete$gender, levels = levels(df_model$gender))
+new_athlete$nationality <- factor(new_athlete$nationality, levels = levels(df_model$nationality))
+new_athlete$age_group <- factor(new_athlete$age_group, levels = levels(df_model$age_group))
+
+# Encode new athlete
+new_dummy <- predict(dummies, new_athlete)
+new_input <- as.matrix(bind_cols(new_athlete %>% select(run_1:wall_balls), as.data.frame(new_dummy)))
+
+pred_percentile_new <- predict(xgb_model, new_input)
+cat("Predicted Percentile for New Athlete:", round(pred_percentile_new, 2), "%\n")
+```

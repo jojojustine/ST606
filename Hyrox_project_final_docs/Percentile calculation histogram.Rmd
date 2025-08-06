@@ -1,0 +1,134 @@
+---
+title: "Percentile Calculation Hyrox Dataset"
+author: "Jojo Justine"
+date: "2025-04-14"
+output:
+  html_document:
+    code_folding: hide
+---
+```{r}
+#install.packages("countrycode")
+#install.packages("rsample")
+```
+
+```{r setup,include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load necessary libraries
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(rsample)
+library(randomForest)
+```
+## Percentile value for both Male and Female participants
+```{r}
+# Read the CSV file
+df <- read.csv("hyrox_results_updated_V4.csv")
+
+# Filter for participants who completed the race and have valid total_time
+df_completed <- df %>%
+  filter(tolower(completed) == "yes",
+         !is.na(total_time),
+         total_time > 0,
+         tolower(gender) %in% c("male", "female"))
+
+# Define percentile steps
+percentile_levels <- seq(0, 1, by = 0.05)
+
+# Function to calculate percentiles for a gender
+get_percentile_table <- function(data, gender_label) {
+  data_gender <- data %>%
+    filter(tolower(gender) == tolower(gender_label))
+
+  percentile_values <- quantile(data_gender$total_time, probs = percentile_levels)
+
+  data.frame(
+    Gender = gender_label,
+    Percentile = percentile_levels * 100,
+    Total_Time_Seconds = as.numeric(percentile_values),
+    Total_Time_Minutes = round(as.numeric(percentile_values) / 60, 2)
+  )
+}
+
+# Calculate percentile tables for men and women
+percentiles_women <- get_percentile_table(df_completed, "female")
+percentiles_men   <- get_percentile_table(df_completed, "male")
+
+# Combine into one table
+percentile_table <- bind_rows(percentiles_women, percentiles_men)
+
+# View the result
+print(percentile_table)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+key_percentiles <- c(0.25, 0.5, 0.75)
+
+# Function to get max histogram count
+get_max_count <- function(data, binwidth = 200) {
+  h <- hist(data$total_time,
+            breaks = seq(min(data$total_time), max(data$total_time) + binwidth, binwidth),
+            plot = FALSE)
+  max(h$counts)
+}
+
+# Compute max counts per gender
+max_counts <- df_completed %>%
+  group_by(gender) %>%
+  summarise(max_y = get_max_count(cur_data()), .groups = "drop")
+
+# Prepare percentile lines
+percentile_lines <- bind_rows(
+  percentiles_men %>%
+    filter(Percentile %in% (key_percentiles * 100)) %>%
+    mutate(gender = "male"),
+  percentiles_women %>%
+    filter(Percentile %in% (key_percentiles * 100)) %>%
+    mutate(gender = "female")
+) %>%
+  rename(xintercept = Total_Time_Seconds) %>%
+  left_join(max_counts, by = "gender") %>%
+  mutate(
+    # Male labels slightly lower, female labels slightly down (but not too close to x-axis)
+    y_pos = ifelse(gender == "male", max_y + 20, 25),
+    vjust_value = ifelse(gender == "male", -0.3, 1.8)
+  )
+
+# Final Plot
+ggplot(df_completed, aes(x = total_time, fill = gender)) +
+  geom_histogram(binwidth = 200, position = "identity", alpha = 0.3, color = "black") +
+
+  geom_vline(
+    data = percentile_lines,
+    aes(xintercept = xintercept, color = gender),
+    linetype = "dashed",
+    size = 1,
+    inherit.aes = FALSE
+  ) +
+
+  geom_text(
+    data = percentile_lines,
+    aes(x = xintercept, y = y_pos, label = paste0(Percentile, "th"), color = gender, vjust = vjust_value),
+    angle = 0,
+    size = 2.5,
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+
+  labs(
+    title = "Race Time Distribution with 25th, 50th, and 75th Percentile Lines",
+    x = "Total Race Time (seconds)",
+    y = "Number of Athletes",
+    fill = "Gender",
+    color = "Gender"
+  ) +
+
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14)
+  )
+
+```
